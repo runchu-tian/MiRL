@@ -1,0 +1,90 @@
+You are analysing failures of a terminal agent: a language model that solves tasks by running shell commands. A stronger model reviewed every step the agent took and marked some of them bad. You already produced the list of failure types below. Here is a fresh sample of bad steps that you have not seen.
+
+Your job has two parts.
+
+1. Assign each example to the types it matches. An example can match more than one type,
+   or none.
+
+2. Only if several examples share a pattern that matches no existing type, propose a new
+   type for it. Do not propose a type for a single example. Do not restate an existing
+   type in different words.
+
+
+## What makes a good type
+
+A good type passes two tests.
+
+Test 1, transfer. If the agent learned to avoid this on half of the examples, would that carry to the other half? It carries when all the examples share one habit. It does not carry when each example needs a different piece of knowledge. A type that fails this is too broad.
+
+Test 2, frequency. Is it common enough that fixing it matters? A type that fails this is too narrow.
+
+Ignore what the task was about. Name what the agent did wrong.
+
+Be strict when assigning. If an example only loosely fits a type, leave it out. A smaller clean list is better than a padded one. You do not have to be right: a wrong type is cheap to change later.
+
+
+## Current types
+
+<types>
+{types}
+</types>
+
+
+## Input
+
+Each example has three fields.
+
+  rejected command: the shell command the agent proposed. Long ones are cut off.
+  what this command is doing: a one-line description of the command.
+  why this is a failure: the reviewer's explanation.
+
+The third field carries most of the signal. The first two tell you what was actually run.
+
+<examples>
+{examples}
+</examples>
+
+
+## When to leave an example unassigned
+
+Leave it unassigned, and say why with one of these three reasons.
+
+  "one_off"
+    The failure is tied to this specific task or tool and is unlikely to recur
+    elsewhere. This is the long tail. It is expected and fine.
+
+  "new_pattern"
+    It matches no type on the list, but it looks like something that could recur. Either
+    you have put it in "new_types" below, or you do not have enough examples here to
+    name it yet. This tells us to keep sampling.
+
+  "unclear"
+    The reviewer's explanation is vague, or the step does not look like a real failure.
+    This is noise in the data, not a failure type.
+
+Choosing the right reason matters. We use these counts to decide whether to stop sampling, so do not use one reason as a catch-all for the others.
+
+
+## Output
+
+Return JSON only:
+
+{
+  "assignments": [
+    {"id": <id>, "types": ["<name>", ...]}
+  ],
+  "unassigned": [
+    {"id": <id>, "reason": "one_off" | "new_pattern" | "unclear"}
+  ],
+  "new_types": [
+    {
+      "name": "<2 to 5 words, names a behaviour>",
+      "definition": "<one paragraph. What the agent does. What makes it wrong. What it
+                     is NOT, so it cannot be confused with the nearest other type.>",
+      "example_ids": [<ids from this batch that match>]
+    }
+  ]
+}
+
+Every input id must appear exactly once, either in "assignments" with a non-empty list of types, or in "unassigned". Use the exact type names from the list above. Leave
+"new_types" empty if nothing new recurs.

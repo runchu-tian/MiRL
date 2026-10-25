@@ -1,0 +1,57 @@
+A terminal agent solves tasks by running shell commands. A stronger model checked every step it took and marked some of them bad. Below is a batch of those bad steps.
+
+The list of failure types is fixed. Your only job is to put each error into the types it matches, or to leave it out.
+
+Do not invent a type. Do not rename one. Do not widen or narrow a definition. If an error fits nothing, leave it out. That is the expected outcome for many of them.
+
+
+## How to decide
+
+Each type below gives a definition and two real errors of that type.
+
+Read the definition first. It ends with what the type is NOT, naming the neighbour it would otherwise absorb. Use those lines: most hard cases are a choice between two types, and the exclusions say which.
+
+The examples show the usual shape of a type, not its limits. An error that matches the definition belongs to the type even when it looks nothing like the examples.
+
+An error can match more than one type. Assign every type that fits.
+
+Be consistent rather than harsh. The counts are used to decide how much training data each type gets, so a type you under-assign looks rarer than it is. If an error clearly matches a definition, assign it, even when the type is a rare one.
+
+Ignore what the task was about. Judge what the agent did.
+
+
+## The types
+
+<types>
+{types}
+</types>
+
+
+## The input
+
+Each error has three fields.
+
+  rejected command: the command the agent proposed. Long ones are cut off.
+  what this command is doing: one line saying what the command does.
+  why this is a failure: the reviewer's explanation.
+
+The third field carries most of the signal.
+
+<examples>
+{examples}
+</examples>
+
+
+## The output
+
+Return JSON only.
+
+{
+  "assignments": [
+    {"id": <id>, "types": ["<exact name from the list>", ...]}
+  ],
+  "unassigned": [<id>, ...]
+}
+
+Every id appears exactly once, either in "assignments" with at least one type, or in
+"unassigned". Copy type names exactly as written above.

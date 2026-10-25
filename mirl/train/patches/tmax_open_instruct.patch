@@ -1,0 +1,275 @@
+diff --git a/training/open-instruct/open_instruct/data_loader.py b/training/open-instruct/open_instruct/data_loader.py
+index 3182581..7d34aab 100644
+--- a/training/open-instruct/open_instruct/data_loader.py
++++ b/training/open-instruct/open_instruct/data_loader.py
+@@ -13,6 +13,7 @@
+ # limitations under the License.
+ 
+ import logging
++import copy
+ import os
+ import threading
+ import time
+@@ -568,7 +569,7 @@ class StreamingDataLoaderConfig:
+     active_sampling: bool = False
+     filter_zero_std_samples: bool = True
+     no_resampling_pass_rate: float | None = None
+-    advantage_normalization_type: Literal["standard", "centered", "maxrl"] = "centered"
++    advantage_normalization_type: Literal["standard", "centered", "maxrl", "rft"] = "centered"
+     """How to normalize per-prompt rollout rewards into policy advantages.
+ 
+     ``standard`` is GRPO-style (centered and divided by group std), ``centered``
+@@ -874,7 +875,7 @@ def _compute_avg_group_performance(n_solved: int, n_zero: int, n_kept: int, batc
+ 
+ 
+ def compute_group_advantages(
+-    scores: np.ndarray, num_samples_per_prompt: int, advantage_normalization_type: str
++    scores: np.ndarray, num_samples_per_prompt: int, advantage_normalization_type: str, valid: np.ndarray | None = None
+ ) -> np.ndarray:
+     if num_samples_per_prompt <= 0:
+         raise ValueError(f"num_samples_per_prompt must be positive, got {num_samples_per_prompt}.")
+@@ -887,12 +888,26 @@ def compute_group_advantages(
+     score_dtype = np.result_type(scores.dtype, np.float32)
+     scores_per_prompt = scores.astype(score_dtype, copy=False).reshape(-1, num_samples_per_prompt)
+     mean_grouped_rewards = scores_per_prompt.mean(axis=-1, keepdims=True)
++    if valid is not None:
++        # MiRL: group mean over the valid samples only (a sample whose sandbox could not be
++        # put into the prefix state is not part of its group); invalid samples are dropped from the batch afterwards.
++        v = np.asarray(valid, dtype=bool).reshape(-1, num_samples_per_prompt)
++        n = np.maximum(v.sum(axis=-1, keepdims=True), 1)
++        mean_grouped_rewards = (scores_per_prompt * v).sum(axis=-1, keepdims=True) / n
+ 
+     if advantage_normalization_type == "standard":
+         std_grouped_rewards = scores_per_prompt.std(axis=-1, keepdims=True)
+         advantages = (scores_per_prompt - mean_grouped_rewards) / (std_grouped_rewards + 1e-8)
+     elif advantage_normalization_type == "centered":
+         advantages = scores_per_prompt - mean_grouped_rewards
++    elif advantage_normalization_type == "rft":
++        # Online RFT keeps the passing samples (score >= 0.5) of groups with at least one
++        # pass and one fail (1..G-1 of the valid samples); advantage 1 for them, 0 otherwise (dropped before packing).
++        v = (np.ones_like(scores_per_prompt, dtype=bool) if valid is None
++             else np.asarray(valid, dtype=bool).reshape(-1, num_samples_per_prompt))
++        passed = (scores_per_prompt >= 0.5) & v
++        k, nv = passed.sum(axis=-1, keepdims=True), v.sum(axis=-1, keepdims=True)
++        advantages = (passed & (k >= 1) & (k <= nv - 1)).astype(score_dtype)
+     elif advantage_normalization_type == "maxrl":
+         advantages = np.zeros_like(scores_per_prompt, dtype=score_dtype)
+         np.divide(
+@@ -1763,10 +1778,19 @@ class DataPreparationActor:
+                         )
+                         concave_length_metrics["concave_length_penalty/groups_with_multi_success"] = len(group_gaps)
+ 
++            # MiRL: PREFIX_DROP_RESET_FAILED=1 -> samples whose env reset (prefix replay) failed
++            # after all retries leave both the group mean and the loss (never a 0 reward from a wrong sandbox state).
++            _states = result.request_info.rollout_states or []
++            reset_failed = np.array(
++                [os.environ.get("PREFIX_DROP_RESET_FAILED") == "1" and i < len(_states)
++                 and "reset failed after" in (_states[i].get("tool_error") or "") for i in range(len(scores))],
++                dtype=bool,
++            )
+             advantages = compute_group_advantages(
+                 scores=scores,
+                 num_samples_per_prompt=self.config.num_samples_per_prompt_rollout,
+                 advantage_normalization_type=self.config.advantage_normalization_type,
++                valid=~reset_failed if reset_failed.any() else None,
+             )
+ 
+             if self.config.save_traces and self.config.rollouts_save_path:
+@@ -1782,6 +1806,31 @@ class DataPreparationActor:
+                 )
+                 self.total_samples_written += len(batch.queries)
+ 
++            rft_unused = (advantages == 0) if self.config.advantage_normalization_type == "rft" else np.zeros_like(reset_failed)
++            if rft_unused.all():
++                rft_unused[:] = False   # keep the batch non-empty; all advantages are 0 -> no update from this step
++            if reset_failed.any() or rft_unused.any():
++                keep = [i for i in range(len(scores)) if not (reset_failed[i] or rft_unused[i])]
++                logger.info(f"[DataPreparationActor] Dropped {int(reset_failed.sum())} rollouts whose prefix replay failed, "
++                            f"{int((rft_unused & ~reset_failed).sum())} RFT rollouts not kept")
++                scores, raw_scores, advantages = scores[keep], raw_scores[keep], advantages[keep]
++                batch = batch[keep]
++                # new objects: the rollout-trace saver (background thread) still reads the unfiltered result
++                result = copy.copy(result)
++                result.request_info = copy.copy(result.request_info)
++                result.responses = [result.responses[i] for i in keep]
++                result.masks = [result.masks[i] for i in keep]
++                result.finish_reasons = [result.finish_reasons[i] for i in keep]
++                if result.logprobs is not None:
++                    result.logprobs = [result.logprobs[i] for i in keep]
++                if result.model_steps:
++                    result.model_steps = [result.model_steps[i] for i in keep]
++                ri = result.request_info
++                for _f in ("num_calls", "timeouts", "tool_errors", "tool_outputs", "tool_runtimes", "tool_calleds",
++                           "tool_call_stats", "rollout_states"):
++                    _v = getattr(ri, _f, None)
++                    if isinstance(_v, list) and len(_v) == len(reset_failed):  # same length as the unfiltered batch
++                        setattr(ri, _f, [_v[i] for i in keep])
+             rollout_sample_ids = list(range(len(batch.queries)))
+             rollout_model_steps = result.model_steps or [result.model_step for _ in result.responses]
+ 
+diff --git a/training/open-instruct/open_instruct/environments/__init__.py b/training/open-instruct/open_instruct/environments/__init__.py
+index da53407..ee519f1 100644
+--- a/training/open-instruct/open_instruct/environments/__init__.py
++++ b/training/open-instruct/open_instruct/environments/__init__.py
+@@ -27,3 +27,4 @@ __all__ = [
+     "SWERLVanilluxSandboxEnv",
+     "SWERLVanilluxSandboxEnvConfig",
+ ]
++from .prefix_replay_sandbox import PrefixReplaySandboxEnv, PrefixReplaySandboxEnvConfig  # MiRL
+diff --git a/training/open-instruct/open_instruct/environments/tools/tools.py b/training/open-instruct/open_instruct/environments/tools/tools.py
+index f26f16c..260e269 100644
+--- a/training/open-instruct/open_instruct/environments/tools/tools.py
++++ b/training/open-instruct/open_instruct/environments/tools/tools.py
+@@ -664,3 +664,7 @@ TOOL_REGISTRY: dict[str, type[BaseEnvConfig]] = {
+     SWERLVanilluxSandboxEnvConfig.tool_class.config_name: SWERLVanilluxSandboxEnvConfig,
+     WordleTextEnvConfig.tool_class.config_name: WordleTextEnvConfig,
+ }
++
++# MiRL: prefix replay sandbox
++from open_instruct.environments.prefix_replay_sandbox import PrefixReplaySandboxEnvConfig  # noqa: E402
++TOOL_REGISTRY[PrefixReplaySandboxEnvConfig.tool_class.config_name] = PrefixReplaySandboxEnvConfig
+diff --git a/training/open-instruct/open_instruct/ground_truth_utils.py b/training/open-instruct/open_instruct/ground_truth_utils.py
+index 84bbf63..800dd7a 100644
+--- a/training/open-instruct/open_instruct/ground_truth_utils.py
++++ b/training/open-instruct/open_instruct/ground_truth_utils.py
+@@ -1422,3 +1422,6 @@ class RewardConfig:
+             return scores, metrics
+ 
+         return reward_fn
++
++# MiRL: registers the "prefix_judge" verifier (VerifierFunction subclass)
++from open_instruct import prefix_judge  # noqa: E402,F401
+diff --git a/training/open-instruct/open_instruct/grpo_utils.py b/training/open-instruct/open_instruct/grpo_utils.py
+index 92a87a0..06fffe0 100644
+--- a/training/open-instruct/open_instruct/grpo_utils.py
++++ b/training/open-instruct/open_instruct/grpo_utils.py
+@@ -63,6 +63,7 @@ class GRPOLossType(enum.StrEnum):
+     cispo = "cispo"
+     dppo = "dppo"
+     tvpo = "tvpo"
++    nll = "nll"   # online RFT = plain likelihood on the kept samples: -A * log pi
+ 
+ 
+ class DPPODivergenceType(enum.StrEnum):
+@@ -312,7 +313,8 @@ class GRPOExperimentConfig(
+                 "use_vllm_logprobs sets old_logprobs to vLLM logprobs, making importance sampling pointless."
+             )
+         if self.use_liger_grpo_loss:
+-            if self.loss_fn not in (GRPOLossType.dapo, GRPOLossType.cispo, GRPOLossType.dppo, GRPOLossType.tvpo):
++            if self.loss_fn not in (GRPOLossType.dapo, GRPOLossType.cispo, GRPOLossType.dppo, GRPOLossType.tvpo,
++                                    GRPOLossType.nll):  # the tiled loss has an nll branch (online RFT)
+                 raise ValueError(
+                     "`use_liger_grpo_loss` currently only supports `loss_fn=dapo`, `loss_fn=cispo`, "
+                     "`loss_fn=dppo`, or `loss_fn=tvpo`."
+@@ -851,6 +853,9 @@ def compute_grpo_loss(
+         # Eq. 11: L_DPPO = E[Σ_t M_t · r_t · A_t]. No symmetric clipping.
+         pg_losses = -advantages * ratio
+         pg_losses2 = pg_losses
++    elif config.loss_fn == GRPOLossType.nll:
++        pg_losses = -advantages * new_logprobs
++        pg_losses2 = pg_losses
+     elif config.loss_fn == GRPOLossType.tvpo:
+         # TVPO: REINFORCE-with-IS surrogate -A · clamp(r, max=c).detach() · log π.
+         # Trust region is enforced via ``policy_freeze_mask`` (built by
+@@ -972,18 +977,44 @@ class TiledGRPOLMHeadLoss(torch.autograd.Function):
+         metric_denom = mask_2d.to(dtype=torch.float32).sum()
+         incoming_grad = (loss_scale.detach().to(dtype=torch.float32) / loss_denom).reshape(())
+ 
++        # MiRL: LMHEAD_MASKED_ONLY=1 runs the (fp32) lm head only on the loss tokens.
++        # Tokens outside response_mask have loss weight 0 and are left out of every metric (all sums use the mask),
++        # so the loss, the lm-head grads and the hidden-state grads are the same; the hidden-state grad of the
++        # other tokens stays 0 as before. The shard count is kept fixed (tensor_split) so every rank makes the same
++        # number of lm-head calls (ZeRO-3 gathers are collective).
++        masked_only = os.environ.get("LMHEAD_MASKED_ONLY") == "1"
++        if masked_only and not getattr(TiledGRPOLMHeadLoss, "_logged_masked_only", False):
++            TiledGRPOLMHeadLoss._logged_masked_only = True
++            logger.info("[plan260929] LMHEAD_MASKED_ONLY active: lm head on loss tokens only")
++        x_full = x
++        if masked_only:
++            sel = mask.nonzero(as_tuple=True)[0]
++            x = x_full.detach().index_select(0, sel)
++            x.requires_grad_(x_requires_grad)
++            labels, mask, loss_weights = labels[sel], mask[sel], loss_weights[sel]
++            advantages, old_logprobs = advantages[sel], old_logprobs[sel]
++            if has_policy_mask:
++                policy_mask = policy_mask[sel]
++            if has_policy_freeze_mask:
++                policy_freeze_mask = policy_freeze_mask[sel]
++            if has_ref_logprobs:
++                ref_logprobs = ref_logprobs[sel]
++            _split = lambda t: list(torch.tensor_split(t, shards, dim=0))
++        else:
++            _split = lambda t: list(torch.chunk(t, chunks=shards, dim=0))
+         x_grad = torch.zeros_like(x) if x_requires_grad else None
+-        x_shards = list(torch.chunk(x, chunks=shards, dim=0))
+-        label_shards = list(torch.chunk(labels, chunks=shards, dim=0))
+-        mask_shards = list(torch.chunk(mask, chunks=shards, dim=0))
+-        loss_weight_shards = list(torch.chunk(loss_weights, chunks=shards, dim=0))
+-        advantage_shards = list(torch.chunk(advantages, chunks=shards, dim=0))
+-        old_logprob_shards = list(torch.chunk(old_logprobs, chunks=shards, dim=0))
+-        policy_mask_shards = list(torch.chunk(policy_mask, chunks=shards, dim=0)) if has_policy_mask else []
+-        policy_freeze_mask_shards = (
+-            list(torch.chunk(policy_freeze_mask, chunks=shards, dim=0)) if has_policy_freeze_mask else []
+-        )
+-        ref_logprob_shards = list(torch.chunk(ref_logprobs, chunks=shards, dim=0)) if has_ref_logprobs else []
++        x_shards = _split(x)
++        label_shards = _split(labels)
++        mask_shards = _split(mask)
++        loss_weight_shards = _split(loss_weights)
++        advantage_shards = _split(advantages)
++        old_logprob_shards = _split(old_logprobs)
++        policy_mask_shards = _split(policy_mask) if has_policy_mask else []
++        policy_freeze_mask_shards = _split(policy_freeze_mask) if has_policy_freeze_mask else []
++        ref_logprob_shards = _split(ref_logprobs) if has_ref_logprobs else []
++        shard_offsets = [0]
++        for _xs in x_shards[:-1]:
++            shard_offsets.append(shard_offsets[-1] + _xs.shape[0])
+ 
+         total_loss_sum = torch.zeros((), dtype=torch.float32, device=hidden_states.device)
+         total_kl_sum = torch.zeros(4, dtype=torch.float32, device=hidden_states.device)
+@@ -998,7 +1029,7 @@ class TiledGRPOLMHeadLoss(torch.autograd.Function):
+                     param.ds_grad_is_ready = grad_is_ready
+ 
+             shard_step = x_shard.shape[0]
+-            shard_offset = shard_idx * x_shards[0].shape[0]
++            shard_offset = shard_offsets[shard_idx]
+             x_shard.requires_grad_(x_requires_grad)
+             if x_grad is not None:
+                 x_shard.grad = x_grad.narrow(0, shard_offset, shard_step).view_as(x_shard)
+@@ -1037,6 +1068,9 @@ class TiledGRPOLMHeadLoss(torch.autograd.Function):
+                     truncated_ratio = torch.clamp(ratio, max=tvpo_truncation_cap).detach()
+                     pg_losses = -advantage_shards[shard_idx] * truncated_ratio * new_logprobs
+                     pg_losses2 = pg_losses
++                elif loss_type == GRPOLossType.nll:
++                    pg_losses = -advantage_shards[shard_idx] * new_logprobs
++                    pg_losses2 = pg_losses
+                 else:
+                     raise ValueError(f"`tiled_grpo_lm_head_loss` does not support loss_fn={loss_type}.")
+                 if has_policy_freeze_mask:
+@@ -1080,6 +1114,10 @@ class TiledGRPOLMHeadLoss(torch.autograd.Function):
+ 
+         if x_grad is None:
+             x_grad = torch.zeros_like(x)
++        if masked_only:
++            full_grad = torch.zeros_like(x_full)
++            full_grad.index_copy_(0, sel, x_grad.to(dtype=full_grad.dtype))
++            x_grad = full_grad
+         ctx.save_for_backward(x_grad.reshape(batch_size, seq_len, hidden_size).detach())
+ 
+         loss = total_loss_sum / loss_denom * loss_scale.detach().to(dtype=total_loss_sum.dtype)
+diff --git a/training/open-instruct/open_instruct/vllm_utils.py b/training/open-instruct/open_instruct/vllm_utils.py
+index 4568a39..c6e9720 100644
+--- a/training/open-instruct/open_instruct/vllm_utils.py
++++ b/training/open-instruct/open_instruct/vllm_utils.py
+@@ -1237,7 +1237,10 @@ async def process_request(actor: LLMRayActor, sub_request_id: str, sampling_para
+                 # No tool call at all should read like a fresh user instruction.
+                 # Malformed or wrong-tool calls get regular tool feedback.
+                 if not parse_result.had_tool_call:
+-                    format_error_feedback.append((tool_call_format_error_message, "user"))
++                    # MiRL: the prefix harness answers a reply without a tool call with a
++                    # TOOL message; PREFIX_NO_TOOL_CALL_AS_TOOL=1 matches it (default unchanged: user message).
++                    no_call_role = "tool" if os.environ.get("PREFIX_NO_TOOL_CALL_AS_TOOL") == "1" else "user"
++                    format_error_feedback.append((tool_call_format_error_message, no_call_role))
+                 elif has_wrong_tool_call or not tool_calls:
+                     format_error_feedback.append((tool_call_format_error_message, "tool"))
+ 

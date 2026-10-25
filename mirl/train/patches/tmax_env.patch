@@ -1,0 +1,278 @@
+diff --git a/rl_data/generator/env.py b/rl_data/generator/env.py
+index c63a4a5..b97fb6f 100644
+--- a/rl_data/generator/env.py
++++ b/rl_data/generator/env.py
+@@ -41,11 +41,55 @@ def _fakeroot_flags() -> List[str]:
+     user-namespace fakeroot emulation.  Default off so unaffected datasets
+     (ET / OT / TermiGen / our 10k) preserve current behaviour.
+     """
++    if os.environ.get("APPTAINER_NO_FAKEROOT", "0") == "1":
++        return []
+     if os.environ.get("APPTAINER_IGNORE_FAKEROOT_COMMAND", "0") == "1":
+         return ["--fakeroot", "--ignore-fakeroot-command"]
+     return ["--fakeroot"]
+ 
+ 
++def _cni_lock():
++    """With APPTAINER_NET_BRIDGE=1, serialize instance start/stop on this machine.
++    Many CNI bridge/firewall plugin runs at once contend for the iptables lock and get killed ("netplugin failed ...
++    signal: killed"): the sandbox fails to start or leaks its network rules. A no-op when the bridge is off."""
++    import contextlib, fcntl
++    if os.environ.get("APPTAINER_NET_BRIDGE", "0") != "1":
++        return contextlib.nullcontext()
++    slots = max(1, int(os.environ.get("APPTAINER_CNI_SLOTS", "1")))   # >1: up to N network set-ups at once
++
++    @contextlib.contextmanager
++    def _lock():
++        import time as _t
++        if slots == 1:
++            with open("/tmp/apptainer_cni.lock", "w") as fh:
++                fcntl.flock(fh, fcntl.LOCK_EX)
++                try:
++                    yield
++                finally:
++                    fcntl.flock(fh, fcntl.LOCK_UN)
++            return
++        while True:                       # take any free slot file
++            for k in range(slots):
++                fh = open("/tmp/apptainer_cni.lock" if k == 0 else f"/tmp/apptainer_cni.lock.{k}", "w")
++                try:
++                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
++                except BlockingIOError:
++                    fh.close(); continue
++                try:
++                    yield
++                finally:
++                    fcntl.flock(fh, fcntl.LOCK_UN); fh.close()
++                return
++            _t.sleep(0.05)
++    return _lock()
++
++
++def _userns_flags():
++    if os.environ.get("APPTAINER_NO_USERNS", "0") == "1":
++        return []
++    return ["--userns"]
++
++
+ class InteractiveContainerEnvironment:
+     """Manages interaction with a pre-built Apptainer container using an interactive shell over a PTY."""
+ 
+@@ -193,6 +237,11 @@ class InteractiveContainerEnvironment:
+     # ----------------------------
+     def _start_shell_once(self) -> bool:
+         """Single attempt: PTY + apptainer shell + wait for init marker."""
++        # Close the PTY pair of an earlier failed start (else it leaks: a failed last attempt leaves its fds set and the
++        # next _start_shell() call does not run _stop_shell() before its first attempt)
++        # (_stop_shell also stops the old reader thread before the fd numbers can be reused)
++        if self.master_fd is not None or self.slave_fd is not None:
++            self._stop_shell()
+         # Create PTY pair
+         self.master_fd, self.slave_fd = pty.openpty()
+ 
+@@ -209,6 +258,9 @@ class InteractiveContainerEnvironment:
+         cmd = [
+             "apptainer", "shell",
+             "--cleanenv",
++            # capabilities are set per exec/shell, not inherited from the instance:
++            # the agent's shell must not edit the host firewall (see _start_instance)
++            "--drop-caps", "CAP_NET_ADMIN,CAP_SYS_ADMIN,CAP_SYS_BOOT,CAP_SYS_MODULE,CAP_SYS_TIME,CAP_SYS_RAWIO,CAP_MKNOD,CAP_SYS_PTRACE",
+             "--pwd", "/home/user",
+             f"instance://{self.instance_name}",
+         ]
+@@ -370,13 +422,52 @@ class InteractiveContainerEnvironment:
+             except Exception:
+                 pass
+ 
++    _DEV_RO_NODES = ("null", "zero", "random", "urandom", "tty")
++
++    def _dev_readonly(self) -> bool:
++        """Remount the sandbox's bind-mounted /dev nodes read-only in its mount namespace; True only if all are ro."""
++        try:
++            info = json.loads(subprocess.run(["apptainer", "instance", "list", "--json", self.instance_name],
++                                             capture_output=True, text=True, timeout=60).stdout)
++            pid = int(info["instances"][0]["pid"])
++            for d in self._DEV_RO_NODES:
++                subprocess.run(["nsenter", "-t", str(pid), "-m", "--", "mount", "-o", "remount,bind,ro", f"/dev/{d}"],
++                               capture_output=True, text=True, timeout=60)
++            mi = open(f"/proc/{pid}/mountinfo").read().splitlines()
++            ro = {d: any(l.split()[4] == f"/dev/{d}" and "ro" in l.split()[5].split(",") for l in mi) for d in self._DEV_RO_NODES}
++            return all(ro.values())
++        except Exception as e:  # noqa: BLE001
++            print(f"❌ read-only /dev check error: {e!r}"[:300])
++            return False
++
++    def _sys_readonly(self) -> bool:
++        """Remount /sys and every mount below it read-only in the sandbox's mount namespace; True only if all are ro."""
++        try:
++            info = json.loads(subprocess.run(["apptainer", "instance", "list", "--json", self.instance_name],
++                                             capture_output=True, text=True, timeout=60).stdout)
++            pid = int(info["instances"][0]["pid"])
++            sysmounts = lambda: [l.split() for l in open(f"/proc/{pid}/mountinfo").read().splitlines()
++                                 if l.split()[4] == "/sys" or l.split()[4].startswith("/sys/")]
++            for f in sysmounts():
++                subprocess.run(["nsenter", "-t", str(pid), "-m", "--", "mount", "-o", "remount,bind,ro", f[4]],
++                               capture_output=True, text=True, timeout=60)
++            ms = sysmounts()
++            return bool(ms) and all("ro" in f[5].split(",") for f in ms)
++        except Exception as e:  # noqa: BLE001
++            print(f"❌ read-only /sys check error: {e!r}"[:300])
++            return False
++
+     def _stop_instance(self) -> None:
+         """Stop the Apptainer instance if running."""
+         if self.instance_name:
+-            subprocess.run(
+-                ["apptainer", "instance", "stop", self.instance_name],
+-                capture_output=True
+-            )
++            # With the bridge network, stop with --force (SIGKILL at once). A plain stop waits up to 10 s for the
++            # sandbox's processes (e.g. servers the agent started) while holding the machine-wide CNI lock.
++            _force = ["--force"] if os.environ.get("APPTAINER_NET_BRIDGE", "0") == "1" else []
++            with _cni_lock():
++                subprocess.run(
++                    ["apptainer", "instance", "stop", *_force, self.instance_name],
++                    capture_output=True
++                )
+             self.instance_name = None
+ 
+     def _resolve_runtime_sif(self) -> Optional[Path]:
+@@ -455,9 +546,11 @@ class InteractiveContainerEnvironment:
+         inner_mount = "/mnt/_agent_home_materialize"
+         copy_cmd = [
+             "apptainer", "exec",
+-            *_fakeroot_flags(), "--userns", "--writable-tmpfs", "--cleanenv",
++            *_fakeroot_flags(), *_userns_flags(), "--writable-tmpfs", "--cleanenv",
+             # See _start_instance for the --no-home rationale (R2E Gym bug).
+             "--no-home",
++            "--no-mount", "tmp",   # own tmpfs /tmp: the host /tmp must not leak between tasks
++            "--drop-caps", "CAP_NET_ADMIN,CAP_SYS_ADMIN,CAP_SYS_BOOT,CAP_SYS_MODULE,CAP_SYS_TIME,CAP_SYS_RAWIO,CAP_MKNOD,CAP_SYS_PTRACE",   # tasks share the host network namespace: no firewall edits
+             "--bind", f"{dest}:{inner_mount}",
+             str(sif_for_materialize),
+             "/bin/sh", "-c", f"cp -a /home/user/. {inner_mount}/",
+@@ -492,9 +585,11 @@ class InteractiveContainerEnvironment:
+ 
+         exec_cmd = [
+             "apptainer", "exec",
+-            *_fakeroot_flags(), "--userns", "--writable-tmpfs", "--cleanenv",
++            *_fakeroot_flags(), *_userns_flags(), "--writable-tmpfs", "--cleanenv",
+             # See _start_instance for the --no-home rationale (R2E Gym bug).
+             "--no-home",
++            "--no-mount", "tmp",   # own tmpfs /tmp: the host /tmp must not leak between tasks
++            "--drop-caps", "CAP_NET_ADMIN,CAP_SYS_ADMIN,CAP_SYS_BOOT,CAP_SYS_MODULE,CAP_SYS_TIME,CAP_SYS_RAWIO,CAP_MKNOD,CAP_SYS_PTRACE",   # tasks share the host network namespace: no firewall edits
+             "--pwd", "/home/user",
+             "--bind", f"{self._writable_home_path}:/home/user",
+             "--bind", f"{self.temp_dir}:{self.temp_dir}",
+@@ -562,11 +657,36 @@ class InteractiveContainerEnvironment:
+ 
+         # Start a long-lived Apptainer instance
+         self.instance_name = f"agent_{uuid.uuid4().hex[:8]}"
++        # APPTAINER_OVERLAY_MB=N gives the sandbox a writable layer on its OWN
++        # tmpfs of at most N MB (mounted at APPTAINER_OVERLAY_DIR/<instance>, used as a directory overlay) instead of
++        # --writable-tmpfs. Same file system type as before (tmpfs: identical ls/df-visible behaviour), but capped: as root
++        # the --writable-tmpfs layer has no size limit, and ~150 training sandboxes once held 556 GB of RAM until the
++        # trainer was killed for low host memory. (An ext3 overlay image broke `ls -la` replays: directory sizes differ.)
++        # Unset = unchanged behaviour.
++        self._overlay_dir = None
++        _ov_mb = os.environ.get("APPTAINER_OVERLAY_MB")
++        if _ov_mb:
++            _ov_dir = os.path.join(os.environ.get("APPTAINER_OVERLAY_DIR", "/tmp/mirl_sbx_overlay"), self.instance_name)
++            os.makedirs(_ov_dir, exist_ok=True)
++            _mnt = subprocess.run(["mount", "-t", "tmpfs", "-o", f"size={int(_ov_mb)}m,mode=0755", "tmpfs", _ov_dir],
++                                  capture_output=True, text=True)
++            if _mnt.returncode != 0:
++                if self.verbose:
++                    print(f"❌ overlay tmpfs mount failed: {_mnt.stderr[-300:]}")
++                shutil.rmtree(_ov_dir, ignore_errors=True)
++                return False
++            os.makedirs(os.path.join(_ov_dir, "upper"), exist_ok=True)
++            os.makedirs(os.path.join(_ov_dir, "work"), exist_ok=True)
++            self._overlay_dir = _ov_dir
+         start_cmd = [
+             "apptainer", "instance", "start",
+             *_fakeroot_flags(),
+-            "--userns",
+-            "--writable-tmpfs",
++            *_userns_flags(),
++            *(["--overlay", self._overlay_dir] if self._overlay_dir else ["--writable-tmpfs"]),
++            # APPTAINER_MEM_MB=N caps the sandbox's processes at N MB of RAM (cgroup; the kernel OOM-kills inside the
++            # sandbox only). Policy-started background processes grew to 40-113 GB. Unset = unchanged behaviour.
++            *(["--memory", f"{int(os.environ['APPTAINER_MEM_MB'])}M", "--memory-swap", f"{int(os.environ['APPTAINER_MEM_MB'])}M"]
++              if os.environ.get("APPTAINER_MEM_MB") else []),
+             # Suppress Apptainer's default $HOME auto-mount. Under --fakeroot
+             # the host user (UID `osey`) is mapped to UID 0 inside the
+             # container, so Apptainer's "mount $HOME -> $HOME" default ends
+@@ -584,6 +704,24 @@ class InteractiveContainerEnvironment:
+             # bind-mounts a writable /home/user from the host, so suppressing
+             # the implicit $HOME mount is safe across every adapter.
+             "--no-home",
++            # Opt-in own network namespace per sandbox (CNI bridge + NAT), so parallel
++            # sandboxes cannot collide on ports. Needs root. Default off = unchanged behaviour.
++            *(["--net", "--network", "bridge"] if os.environ.get("APPTAINER_NET_BRIDGE", "0") == "1" else []),
++            # Own tmpfs /tmp. Without this apptainer binds the HOST /tmp into every
++            # instance, so concurrent tasks see each other's temp files and task files
++            # pile up on the host.
++            "--no-mount", "tmp",
++            # APPTAINER_PRIVATE_DEV=1 gives each sandbox its OWN minimal /dev
++            # (--contain) and does not bind the starting directory (--no-mount cwd). Without this, apptainer shares the
++            # host /dev and the caller's cwd; a policy command run as root ("rm -rf /*") deleted the host /dev and the
++            # sandbox service's code folder.
++            *(["--contain", "--no-mount", "cwd"] if os.environ.get("APPTAINER_PRIVATE_DEV", "0") == "1" else []),
++            # Tasks run as root in the HOST network namespace (no user namespace here). Without this a task's
++            # `iptables` edits the host firewall (a task's OUTPUT DROP rule once cut
++            # the machine off the network for 6 h). Also drop sysadmin/boot/module/
++            # time/rawio/mknod/ptrace. Network, DNS, pip and file writes stay usable; sysctl,
++            # mount, reboot, module loads and firewall edits fail inside the sandbox.
++            "--drop-caps", "CAP_NET_ADMIN,CAP_SYS_ADMIN,CAP_SYS_BOOT,CAP_SYS_MODULE,CAP_SYS_TIME,CAP_SYS_RAWIO,CAP_MKNOD,CAP_SYS_PTRACE",
+             "--bind", f"{self.temp_dir}:{self.temp_dir}",
+             "--bind", f"{self._writable_home_path}:/home/user",
+             "--cleanenv",
+@@ -592,7 +730,8 @@ class InteractiveContainerEnvironment:
+         ]
+         if self.verbose:
+             print(f"🔧 Starting instance with command: {' '.join(start_cmd)}")
+-        start_proc = subprocess.run(start_cmd, capture_output=True, text=True)
++        with _cni_lock():
++            start_proc = subprocess.run(start_cmd, capture_output=True, text=True)
+         if start_proc.returncode != 0:
+             if self.verbose:
+                 print(f"❌ Instance start failed: {start_proc.stdout + start_proc.stderr}")
+@@ -601,6 +740,27 @@ class InteractiveContainerEnvironment:
+             if self.verbose:
+                 print(f"✅ Instance started: {start_proc.stdout + start_proc.stderr}")
+ 
++        # With --contain the private /dev still holds BIND MOUNTS of the host's
++        # null/zero/random/urandom/tty nodes, so a root "chmod" inside the sandbox changed the HOST /dev/null
++        # (delete was already blocked). APPTAINER_DEV_RO=1 remounts these binds read-only in the sandbox's own mount
++        # namespace (from the host, as root; the sandbox has no CAP_SYS_ADMIN to undo it): chmod/chown fail, device reads
++        # and writes still work. apptainer's own "--bind ...:ro" is skipped for paths --contain already mounted. If the
++        # remount cannot be confirmed, the sandbox is stopped (fail closed). Default off = unchanged behaviour.
++        if os.environ.get("APPTAINER_PRIVATE_DEV", "0") == "1" and os.environ.get("APPTAINER_DEV_RO", "0") == "1":
++            if not self._dev_readonly():
++                print(f"❌ read-only /dev remount failed for {self.instance_name}; stopping the sandbox")
++                self._stop_instance()
++                return False
++        # The sandbox's /sys is the HOST sysfs (tasks run as real root), and a
++        # policy command chmod'ed all of /sys to 700 (raylet aborted, vLLM/gloo could not read /sys/class/net).
++        # APPTAINER_SYS_RO=1 remounts /sys and the mounts below it read-only in the sandbox's mount namespace, the same
++        # way as /dev above (chmod/chown/writes fail, reads work). Fail closed. Default off = unchanged behaviour.
++        if os.environ.get("APPTAINER_SYS_RO", "0") == "1":
++            if not self._sys_readonly():
++                print(f"❌ read-only /sys remount failed for {self.instance_name}; stopping the sandbox")
++                self._stop_instance()
++                return False
++
+         # Start the interactive shell
+         if not self._start_shell():
+             if self.verbose:
+@@ -807,6 +967,10 @@ class InteractiveContainerEnvironment:
+         if self.temp_dir and self.temp_dir.exists():
+             shutil.rmtree(self.temp_dir, ignore_errors=True)
+         self._stop_instance()
++        if getattr(self, "_overlay_dir", None):
++            subprocess.run(["umount", "-l", self._overlay_dir], capture_output=True)
++            shutil.rmtree(self._overlay_dir, ignore_errors=True)
++            self._overlay_dir = None
+         if self.verbose:
+             print("🧹 Cleaned up temporary files and processes")
+ 

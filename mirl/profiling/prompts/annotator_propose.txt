@@ -1,0 +1,97 @@
+You are analysing failures of a terminal agent: a language model that solves tasks by running shell commands. A stronger model reviewed every step the agent took and marked some of them bad. Below is a random sample of those bad steps.
+
+Your job is to find the recurring ways this agent fails. The list has to be useful for training, not just descriptive.
+
+
+## What makes a good type
+
+A good type passes two tests.
+
+Test 1, transfer. If the agent learned to avoid this on half of the examples, would that carry to the other half? It carries when all the examples share one habit. It does not carry when each example needs a different piece of knowledge.
+
+Test 2, frequency. Is the type common enough that fixing it matters?
+
+A type that fails test 1 is too broad. A type that fails test 2 is too narrow.
+
+Good:
+  "repeats a command that just failed, unchanged"
+  One habit: check whether anything changed before running the same thing again. Learn it
+  on some examples, get it on the rest. And it happens often.
+
+Too broad:
+  "runs a tool on input it cannot accept"
+  Sounds general, but every example needs a different fact. Learning that openssl cannot
+  read a public key teaches nothing about ffmpeg. Nothing carries.
+
+Too narrow:
+  "uses openssl x509 on a public key"
+  This one does carry, but it almost never happens. Fixing it changes nothing.
+
+Two more rules.
+
+Ignore what the task was about. The examples mention numpy, sqlite, openssl, pydub. That is incidental. Name what the agent did wrong. If a type name holds a tool name or a file name, it is too narrow.
+
+Write each definition so it can be checked on one example alone, by a yes or no question. Someone holding your definition and one bad step must be able to decide, without seeing the rest of the task.
+
+## How sure you need to be
+
+You do not have to find every type, and you do not have to be right. Name only the types you are confident about, and leave the rest out. A type we miss costs nothing. A type that turns out to be wrong is cheap to change later.
+
+You cannot really answer test 1 without training a model, so guess. Guessing is expected.
+
+
+## Input
+
+Each example has three fields.
+
+  rejected command: the shell command the agent proposed. Long ones are cut off.
+  what this command is doing: a one-line description of the command.
+  why this is a failure: the reviewer's explanation.
+
+The third field carries most of the signal. The first two tell you what was actually run.
+
+<examples>
+{examples}
+</examples>
+
+
+## When to leave an example unassigned
+
+Do not force an example into a type that does not fit. Leave it unassigned, and say why with one of these three reasons.
+
+  "one_off"
+    The failure is tied to this specific task or tool and is unlikely to recur
+    elsewhere. This is the long tail. It is expected and fine.
+
+  "new_pattern"
+    It matches no type on your list, but it looks like something that could recur. You
+    do not have enough examples here to name it yet. This tells us to keep sampling.
+
+  "unclear"
+    The reviewer's explanation is vague, or the step does not look like a real failure.
+    This is noise in the data, not a failure type.
+
+Choosing the right reason matters. We use these counts to decide whether to stop sampling, so do not use one reason as a catch-all for the others.
+
+
+## Output
+
+Return JSON only:
+
+{
+  "types": [
+    {
+      "name": "<2 to 5 words, names a behaviour>",
+      "definition": "<one paragraph. What the agent does. What makes it wrong. What it
+                     is NOT, so it cannot be confused with the nearest other type.>",
+      "example_ids": [<ids from this batch that match>]
+    }
+  ],
+  "unassigned": [
+    {"id": <id>, "reason": "one_off" | "new_pattern" | "unclear"}
+  ]
+}
+
+Every input id must appear exactly once, either in the example_ids of at least one type, or in "unassigned". An example may match more than one type.
+
+Propose as many types as the data supports, and no more.

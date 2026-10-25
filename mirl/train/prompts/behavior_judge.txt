@@ -1,0 +1,21 @@
+You're reviewing a short stretch of an AI agent's work on a command-line task: the first {m} steps it took after a given point.
+You see the task, what the agent did in these steps (its reasoning, message, command and the command's output, in order) and one specific type of possible failure mode.
+
+--- THE TASK ---
+{task}
+
+--- WHAT THE AGENT DID NEXT ({m} steps) ---
+{steps}
+
+--- The failure mode we're interested in ---
+Name: {mode_name}
+Definition: {mode_definition}
+Examples of this mode:
+{mode_examples}
+
+--- QUESTION ---
+Did this named failure mode happen in any of these steps?
+Focus only on the named failure mode.
+Answer "yes" if this failure mode is present in at least one of these steps, even if there are other issues.
+Answer "no" if this specific failure mode is absent from all of these steps: either the steps were fine, or their faults were different ones.
+Think it through, then end your reply with <answer>yes</answer> or <answer>no</answer>.
