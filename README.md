@@ -6,7 +6,11 @@ Code for the paper "MiRL: Error-Targeted Reinforcement Learning for Correcting T
 
 Terminal agents often repeat the same misbehaviors, such as making false claims about tests or repeating unnecessary checks. Misbehavior-driven RL (MiRL) first profiles the errors of a policy to find these generalizable misbehaviors: kinds of wrong steps that recur across many environments. It then trains the policy with RL, starting rollouts at the steps where these misbehaviors occur, and rewards a rollout only if it passes the tests and avoids the misbehavior. Trained from Qwen3.5-4B on merely 189 environments, MiRL outperforms TMax-4B on Terminal-Bench Lite (51.8% vs. 47.4%) and matches it on Terminal-Bench 2.1 (21.3% vs. 20.6%), with 35% of its rollouts.
 
+## Progress
 
+We are still improving this GitHub repository and our Hugging Face repositories.
+
+- [Oct 26, 2026] 🎉 We’ve made an initial release of our code, model checkpoint, and data.
 
 ## Installation
 
@@ -110,7 +114,7 @@ bash scripts/rerun.sh --prefixes runs/prefixes/prefixes.jsonl --tasks-dir /path/
 
 Each sandbox gets its own network, which needs root. If this does not work on your machine, add `--no-net-bridge`, but some prefixes may then fail the check because of port collisions. Run `bash scripts/rerun.sh --help` for all options.
 
-`prefixes_rerun.jsonl` holds the kept prefixes, and their environments are the training environments.
+`prefixes_rerun.jsonl` holds the kept prefixes, and their environments are the training environments. Our training prefixes are released in [Rtian/MiRL-train](https://huggingface.co/datasets/Rtian/MiRL-train).
 
 ## MiRL training
 
@@ -217,9 +221,3 @@ The citation will be added with the paper link.
 ## License
 
 The code is released under the [Apache 2.0 license](LICENSE).
-
-## Progress
-
-We are still improving this GitHub repository and our Hugging Face repositories.
-
-- [Oct 26, 2026] 🎉 We’ve made an initial release of our code, model checkpoint, and data.
