@@ -10,7 +10,7 @@ Terminal agents often repeat the same misbehaviors, such as making false claims 
 
 We are still improving this GitHub repository and our Hugging Face repositories.
 
-- [Oct 26, 2026] 🎉 We’ve made an initial release of our code, model checkpoint, and data.
+- [Oct 26, 2026] 🎉 We’ve made an initial release of our [code](https://github.com/runchu-tian/MiRL), [model checkpoint](https://huggingface.co/Rtian/MiRL-Qwen3.5-4B), [data](https://huggingface.co/datasets/Rtian/MiRL-train), and [evaluation trajectories](https://huggingface.co/datasets/Rtian/MiRL-TB2.1-trajectories).
 
 ## Installation
 
