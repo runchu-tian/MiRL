@@ -6,13 +6,13 @@ Code for the paper "MiRL: Error-Targeted Reinforcement Learning for Correcting T
 
 Terminal agents often repeat the same misbehaviors, such as making false claims about tests or repeating unnecessary checks. Misbehavior-driven RL (MiRL) first profiles the errors of a policy to find these generalizable misbehaviors: kinds of wrong steps that recur across many environments. It then trains the policy with RL, starting rollouts at the steps where these misbehaviors occur, and rewards a rollout only if it passes the tests and avoids the misbehavior. Trained from Qwen3.5-4B on merely 189 environments, MiRL outperforms TMax-4B on Terminal-Bench Lite (51.8% vs. 47.4%) and matches it on Terminal-Bench 2.1 (21.3% vs. 20.6%), with 35% of its rollouts.
 
-## Progress
+## 📢 Progress
 
 We are still improving this GitHub repository and our Hugging Face repositories.
 
 - [Oct 26, 2026] 🎉 We’ve made an initial release of our [code](https://github.com/runchu-tian/MiRL), [model checkpoint](https://huggingface.co/Rtian/MiRL-Qwen3.5-4B), [data](https://huggingface.co/datasets/Rtian/MiRL-train), and [evaluation trajectories](https://huggingface.co/datasets/Rtian/MiRL-TB2.1-trajectories).
 
-## Installation
+## 🛠️ Installation
 
 ### Commands
 
@@ -40,7 +40,7 @@ Besides, the tools we use are:
 - [Apptainer](https://apptainer.org/) 1.3.4, for the task sandboxes.
 - [Docker](https://www.docker.com/), to build the task images.
 
-## Error profiling
+## 🔍 Error profiling
 
 To locate the errors of the policy, we roll out on a pool of environments and let the teacher replace each error step with a corrected one, so that the rollout can reveal later errors. At each step of a rollout, error profiling goes through four stages:
 
@@ -103,7 +103,7 @@ In the paper, we used `--size 300` in all stages, `--batches 3`, and `--min-batc
 
 `types.json` holds the types that recur across batches, each with two examples. `labels.jsonl` holds the types of every error step, and `misbehaviors.json` holds the types that are kept.
 
-## Misbehavior prefixes
+## ✂️ Misbehavior prefixes
 
 We select a fixed number of misbehavior prefixes for each misbehavior to form the training data. We rerun the commands of each prefix step by step in a fresh container of its environment, and keep the prefix only if every command returns exactly the same output as in the prefix.
 
@@ -116,7 +116,7 @@ Each sandbox gets its own network, which needs root. If this does not work on yo
 
 `prefixes_rerun.jsonl` holds the kept prefixes, and their environments are the training environments. Our training prefixes are released in [Rtian/MiRL-train](https://huggingface.co/datasets/Rtian/MiRL-train).
 
-## MiRL training
+## 🎯 MiRL training
 
 The behavior judge is [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/latest-model), which reads the m=5 steps after the prefix. Set `GEMINI_API_KEY` before training.
 
@@ -143,7 +143,7 @@ python mirl/train/build_rows.py --prefixes runs/prefixes/prefixes_rerun.jsonl --
 
 Train each with `scripts/train.sh` as above.
 
-## Misbehavior rate
+## 🔬 Misbehavior rate
 
 To verify that MiRL reduces the misbehaviors, we measure how often each policy repeats a misbehavior before and after training.
 
@@ -154,7 +154,7 @@ bash scripts/misbehavior_rate.sh --set runs/rate/unseen.jsonl --taxonomy runs/ta
 
 `--modes` takes misbehavior names from `misbehaviors.json`. `rates.md` holds the misbehavior rate of each judge, policy, and misbehavior.
 
-## Evaluation
+## 📊 Evaluation
 
 We evaluate on [Terminal-Bench Lite](https://www.openthoughts.ai/blog/openthoughts-tblite) and [Terminal-Bench 2.1](https://www.tbench.ai/news/terminal-bench-2-1) with [Vanillux2Agent](https://github.com/hamishivi/tmax/blob/7387d2f9142397a458dc39f0827a2ab0b4c03cda/Vanillux2Agent/agent.py). Key parameters can be found in Table 1 of the paper or the code. 
 
@@ -200,7 +200,7 @@ Our model checkpoint is released in [Rtian/MiRL-Qwen3.5-4B](https://huggingface.
 > **Warning: the concurrency of the evaluation can change the score.**
 > With more tasks at once, each sandbox gets less CPU and each model step takes longer. More tasks then hit their time limits and score 0. Set the concurrency (`--nc`) to fit your machine; our default may not suit it. Besides, the score on terminal tasks also depends strongly on the server, the sandbox configuration, and the hardware.
 
-## Repository structure
+## 🗂️ Repository structure
 
 ```
 mirl/
@@ -214,10 +214,10 @@ scripts/       launch scripts
 assets/        figures for this README
 ```
 
-## Citation
+## 📝 Citation
 
 The citation will be added with the paper link.
 
-## License
+## ⚖️ License
 
 The code is released under the [Apache 2.0 license](LICENSE).
