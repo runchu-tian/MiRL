@@ -89,6 +89,8 @@ b, strong { font-weight: 600; }
 .hero h1 .name { color: var(--blue); }
 .authors { font-family: var(--sans); font-size: 17.5px; color: var(--ink); margin-bottom: 6px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 18px; }
 .authors span { white-space: nowrap; }
+.authors a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line-2); transition: color .15s, border-color .15s; }
+.authors a:hover { color: var(--blue); border-color: var(--blue); text-decoration: none; }
 .affil { font-family: var(--sans); font-size: 15.5px; color: var(--ink-2); margin-bottom: 4px; }
 .venue { font-family: var(--sans); font-size: 14px; color: var(--ink-3); margin-bottom: 28px; }
 .buttons { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
