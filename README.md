@@ -1,6 +1,7 @@
 # MiRL: Error-Targeted Reinforcement Learning for Correcting Terminal Agent Misbehaviors
 
 [![arXiv](https://img.shields.io/badge/arXiv-2610.35697-b31b1b.svg)](https://arxiv.org/abs/2610.35697)
+[![Blog](https://img.shields.io/badge/Blog-2f65ae.svg)](https://runchu-tian.github.io/MiRL/)
 [![Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-MiRL--Qwen3.5--4B-yellow)](https://huggingface.co/Rtian/MiRL-Qwen3.5-4B)
 [![Data](https://img.shields.io/badge/%F0%9F%A4%97%20Data-MiRL--train-yellow)](https://huggingface.co/datasets/Rtian/MiRL-train)
 [![Trajectories](https://img.shields.io/badge/%F0%9F%A4%97%20Trajectories-MiRL--TB2.1--trajectories-yellow)](https://huggingface.co/datasets/Rtian/MiRL-TB2.1-trajectories)
