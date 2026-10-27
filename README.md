@@ -1,6 +1,12 @@
 # MiRL: Error-Targeted Reinforcement Learning for Correcting Terminal Agent Misbehaviors
 
-Code for the paper "MiRL: Error-Targeted Reinforcement Learning for Correcting Terminal Agent Misbehaviors". The paper link will be added as soon as we release our arxiv preprint.
+[![arXiv](https://img.shields.io/badge/arXiv-2610.35697-b31b1b.svg)](https://arxiv.org/abs/2610.35697)
+[![Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-MiRL--Qwen3.5--4B-yellow)](https://huggingface.co/Rtian/MiRL-Qwen3.5-4B)
+[![Data](https://img.shields.io/badge/%F0%9F%A4%97%20Data-MiRL--train-yellow)](https://huggingface.co/datasets/Rtian/MiRL-train)
+[![Trajectories](https://img.shields.io/badge/%F0%9F%A4%97%20Trajectories-MiRL--TB2.1--trajectories-yellow)](https://huggingface.co/datasets/Rtian/MiRL-TB2.1-trajectories)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+Code for the paper "[MiRL: Error-Targeted Reinforcement Learning for Correcting Terminal Agent Misbehaviors](https://arxiv.org/abs/2610.35697)".
 
 <p align="center"><img src="assets/overview.png" width="100%" alt="Overview of MiRL"></p>
 
@@ -79,7 +85,7 @@ If the teacher fails to give a correction that passes the error localizer within
 
 To find the errors that recur across environments, we group the error steps into error types.
 
-The annotator is [Claude Opus 5](https://www.anthropic.com/model-card).
+The annotator is [Claude Opus 5](https://www.anthropic.com/claude-opus-5-system-card).
 
 Install the SDK with `pip install anthropic==2.3.0` and set `ANTHROPIC_API_KEY`.
 
@@ -118,7 +124,7 @@ Each sandbox gets its own network, which needs root. If this does not work on yo
 
 ## 🎯 MiRL training
 
-The behavior judge is [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/latest-model), which reads the m=5 steps after the prefix. Set `GEMINI_API_KEY` before training.
+The behavior judge is [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash), which reads the m=5 steps after the prefix. Set `GEMINI_API_KEY` before training.
 
 ```bash
 bash mirl/train/install.sh
@@ -216,7 +222,17 @@ assets/        figures for this README
 
 ## 📝 Citation
 
-The citation will be added with the paper link.
+```bibtex
+@misc{tian2026mirlerrortargetedreinforcementlearning,
+      title={MiRL: Error-Targeted Reinforcement Learning for Correcting Terminal Agent Misbehaviors}, 
+      author={Runchu Tian and Zaid Khan and Zun Wang and Justin Chih-Yao Chen and Mohit Bansal},
+      year={2026},
+      eprint={2610.35697},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2610.35697}, 
+}
+```
 
 ## ⚖️ License
 
