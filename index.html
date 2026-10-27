@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiRL: Error-Targeted Reinforcement Learning for Correcting Terminal Agent Misbehaviors</title>
+<meta name="description" content="MiRL first profiles the errors of a policy to find generalizable misbehaviors, then trains the policy with RL, starting rollouts at the steps where these misbehaviors occur.">
+<meta property="og:title" content="MiRL: Error-Targeted Reinforcement Learning for Correcting Terminal Agent Misbehaviors">
+<meta property="og:description" content="MiRL first profiles the errors of a policy to find generalizable misbehaviors, then trains the policy with RL, starting rollouts at the steps where these misbehaviors occur.">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="static/css/style.css">
+</head>
+<body>
+
+<nav class="nav" id="nav">
+  <div class="wrap">
+    <a class="brand" href="#top"><span>MiRL</span></a>
+    <div class="links">
+      <a href="#motivation">Motivation</a>
+      <a href="#method">Method</a>
+      <a href="#misbehaviors">Misbehaviors</a>
+      <a href="#results">Results</a>
+      <a href="#analysis">Analysis</a>
+    </div>
+    <div class="ext">
+      <a href="https://arxiv.org/abs/2610.35697">Paper</a>
+      <a href="https://github.com/runchu-tian/MiRL">Code</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <h1><span class="name">MiRL</span>: Error-Targeted Reinforcement Learning for Correcting Terminal Agent Misbehaviors</h1>
+    <div class="authors">
+      <span>Runchu Tian</span><span>Zaid Khan</span><span>Zun Wang</span><span>Justin Chih-Yao Chen</span><span>Mohit Bansal</span>
+    </div>
+    <div class="affil" style="margin-bottom:30px">University of North Carolina at Chapel Hill</div>
+    <div class="buttons">
+      <a class="btn" href="https://arxiv.org/abs/2610.35697">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>Paper</a>
+      <a class="btn" href="https://github.com/runchu-tian/MiRL">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57l-.02-2.04c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.8 1.3 3.49 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3"/></svg>Code</a>
+      <a class="btn" href="https://huggingface.co/Rtian/MiRL-Qwen3.5-4B"><span class="emo">🤗</span>Model</a>
+      <a class="btn" href="https://huggingface.co/datasets/Rtian/MiRL-train"><span class="emo">🤗</span>Data</a>
+      <a class="btn" href="https://huggingface.co/datasets/Rtian/MiRL-TB2.1-trajectories"><span class="emo">🤗</span>Trajectories</a>
+      <a class="btn light" href="#bibtex">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h4v4c0 3-1.5 5-4 6M14 7h4v4c0 3-1.5 5-4 6"/></svg>BibTeX</a>
+    </div>
+
+    <div class="fig" id="fig-ov" style="margin-top:46px;text-align:left">
+      <button class="replay" aria-label="Replay animation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button>
+      <div class="fig-title">MiRL: a misbehavior-driven RL recipe</div>
+      <div class="ov" id="ov"></div>
+    </div>
+    <p class="caption">MiRL starts rollouts from misbehavior prefixes and rewards rollouts that pass the tests and avoid the misbehavior.</p>
+  </div>
+</header>
+
+<main>
+
+<section id="abstract">
+  <div class="wrap">
+    <div class="eyebrow">Abstract</div>
+    <div class="abstract"><p>Error-targeted learning gives a legible way to improve a model: identify specific weaknesses of the model, train the model to fix these weaknesses, and check whether the weaknesses are fixed. We study how to apply error-targeted learning to terminal agents, which solve long-horizon tasks specified in natural language by interacting with a command shell. Existing error-targeted methods are designed for single-turn tasks, and existing analyses of agent failures are used to evaluate and debug agents rather than to train them. We propose <b>Mi</b>sbehavior-driven <b>RL</b> (MiRL), which first profiles the errors of a policy to find <em>generalizable misbehaviors</em>: kinds of wrong steps that recur across many environments. MiRL then trains the policy with RL, starting rollouts at the steps where these misbehaviors occur and rewarding a rollout only if it passes the tests and avoids the misbehavior. On Qwen3.5-4B, eight misbehaviors account for 52.1% of wrong steps. After training with MiRL, the policy repeats the measured misbehaviors 43% to 57% less often on average on unseen prefixes. MiRL outperforms TMax-4B on Terminal-Bench Lite (51.8% vs. 47.4%) and matches it on Terminal-Bench 2.1 (21.3% vs. 20.6%), while using 35% of its rollouts. These results show that error-targeted learning can be applied to realistic, long-horizon terminal tasks.</p></div>
+  </div>
+</section>
+
+<section id="motivation">
+  <div class="wrap">
+    <div class="eyebrow">Motivation</div>
+    <h2>Error-targeted learning for terminal agents</h2>
+    <p>A terminal agent takes dozens of steps per task, and a failed task is often caused by one or two wrong steps, such as reporting that the tests pass without running them. This creates two difficulties.</p>
+    <div class="two">
+      <div class="card"><span class="tag">First</span>Many wrong steps are specific to one task, so fixing them one at a time does not help on other tasks; training should instead target <em>generalizable misbehaviors</em>, kinds of wrong steps that recur across many tasks.</div>
+      <div class="card"><span class="tag">Second</span>Training from the start of a task spends most rollouts on steps the agent already performs correctly, and the agent may never reach the state where the misbehavior occurred.</div>
+    </div>
+    <p style="margin-top:22px">We therefore ask:</p>
+    <div class="qs">
+      <a class="q" href="#method" data-stage="0"><span class="n">1</span><span>How can we identify the generalizable misbehaviors of a terminal agent?<span class="go">Error profiling →</span></span></a>
+      <a class="q" href="#method" data-stage="2"><span class="n">2</span><span>How can we train the agent directly at the steps where they occur?<span class="go">MiRL →</span></span></a>
+    </div>
+  </div>
+</section>
+
+<section id="method">
+  <div class="wrap">
+    <div class="eyebrow">Method</div>
+    <h2>Error profiling and MiRL</h2>
+    <p>A terminal environment consists of an instruction that states a user requirement, a container in which the agent runs shell commands, and a test suite that checks the final state of the container.</p>
+  </div>
+  <div class="wrap">
+    <div class="fig">
+      <div class="task">
+        <div>
+          <div class="lbl">Name</div>
+          <div class="name">Deduplicate a photo library</div>
+          <div class="lbl">Instruction</div>
+          <blockquote>Find every photo in backup/ that is byte-identical to one in photos/, move it into dupes/, and list it in dupes/report.csv.</blockquote>
+        </div>
+        <div>
+          <div class="lbl">Container</div>
+          <div class="term"><div class="tbar"><i></i><i></i><i></i></div><span class="ps">$</span> tree -L 1 ~/lib<br><span class="dim">├──</span> <span class="dir">photos/</span> <span class="dim">(412 .jpg)</span><br><span class="dim">├──</span> <span class="dir">backup/</span> <span class="dim">(389 .jpg)</span><br><span class="dim">└──</span> <span class="dir">dupes/</span> <span class="dim">(empty)</span></div>
+          <div class="lbl">Tests</div>
+          <div class="tests">
+            <div><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#fff" stroke="#2b2b2b" stroke-width="1.5"/><path d="M3 8.5h18" stroke="#2b2b2b" stroke-width="1.5"/><path d="M8 14l2.6 2.6L16.5 11" fill="none" stroke="#3f8f4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><code>dupes/</code>: all and only true duplicates</span></div>
+            <div><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" fill="#fff" stroke="#2b2b2b" stroke-width="1.5"/><path d="M3 8.5h18" stroke="#2b2b2b" stroke-width="1.5"/><path d="M8 14l2.6 2.6L16.5 11" fill="none" stroke="#3f8f4f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span><code>report.csv</code>: lists every moved file</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="caption">An example terminal environment. The agent must move duplicate photos from backup/ into dupes/ and list them in report.csv; the tests check the result.</p>
+  </div>
+
+  <div class="wrap" style="margin-top:64px">
+    <div class="stepper" id="stepper">
+      <div><div class="grp">Error profiling</div><div class="tabs">
+        <button class="tab" data-i="0"><span class="no">a</span>Error localization<span class="prog"></span></button>
+        <button class="tab" data-i="1"><span class="no">b</span>Error taxonomy<span class="prog"></span></button>
+      </div></div>
+      <div><div class="grp">RL training</div><div class="tabs">
+        <button class="tab" data-i="2"><span class="no">c</span>Misbehavior prefixes<span class="prog"></span></button>
+        <button class="tab" data-i="3"><span class="no">d</span>MiRL training<span class="prog"></span></button>
+      </div></div>
+    </div>
+    <div class="stage-wrap">
+      <div class="fig" id="stages">
+        <div class="stage" id="st0"></div>
+        <div class="stage" id="st1"></div>
+        <div class="stage" id="st2"></div>
+        <div class="stage" id="st3"></div>
+        <div class="tl"><button class="play" id="tl-play" aria-label="Play"><svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z" fill="currentColor"/></svg></button><input type="range" id="tl-range" min="0" max="1" step="1" value="0" aria-label="Timeline"></div>
+      </div>
+      <div class="stage-text" id="stage-text">
+        <div class="t" data-i="0">
+          <h3>(a) Error localization</h3>
+          <p>At each step of a rollout, error profiling goes through four stages.</p>
+          <ol>
+            <li><span class="beat" data-b="1">(1) The policy proposes its next step from the current prefix.</span></li>
+            <li><span class="beat" data-b="2">(2) The error localizer checks the step with its prefix, flags it only if it is likely to lead to failure, and writes a short explanation.</span></li>
+            <li><span class="beat" data-b="3">(3) For a flagged step, the teacher writes a correction from the same prefix, so that the rollout can continue without being pushed into incorrect states. The correction is checked in the same way as a step of the policy.</span></li>
+            <li><span class="beat" data-b="4">(4) The accepted step, either the policy's own step or a correction from the teacher, is executed, and the rollout returns to (1) for the next step.</span></li>
+          </ol>
+          <p><span class="beat" data-b="5">During this process, each error step is recorded with its prefix and the error localizer's explanation.</span></p>
+        </div>
+        <div class="t" data-i="1">
+          <h3>(b) Error taxonomy</h3>
+          <p><span class="beat" data-b="1">First, the annotator reads batches of error steps, together with the error localizer's explanations, and proposes error types for each batch, with a name and a definition for each type.</span> <span class="beat" data-b="2">We repeat this on several batches and keep the types that recur across batches.</span></p>
+          <p><span class="beat" data-b="3">This gives a fixed set of error types. The annotator then labels every error step with one or more types from this set, or with none if it fits no known type.</span> <span class="beat" data-b="4">Finally, we keep the error types that cover at least a fixed share of the error steps and treat the others as a long tail of rare types.</span></p>
+        </div>
+        <div class="t" data-i="2">
+          <h3>(c) Misbehavior prefixes</h3>
+          <p><span class="beat" data-b="1">However, a live rollout cannot start from a prefix directly. To continue from step <i>k</i>, the policy needs the container state at step <i>k</i>, but the recorded data keep only the prefix and not the container, since saving a snapshot of the container at every step would require substantial storage.</span></p>
+          <p><span class="beat" data-b="2">We therefore need to reconstruct the state from the prefix: we rerun the commands of the prefix step by step in a fresh container of its environment, and keep the prefix only if every command returns exactly the same output as in the prefix.</span> <span class="beat" data-b="3">Many containers are flaky: the same command may produce different outputs depending on time, randomness, or network conditions. Such prefixes cannot reach the required state, so we discard them.</span></p>
+          <p><span class="beat" data-b="4">For these eight misbehaviors, we sample 80 misbehavior prefixes each, which gives 640 prefixes. After the rerun check, 219 prefixes remain (34%), from 189 environments.</span></p>
+        </div>
+        <div class="t" data-i="3">
+          <h3>(d) MiRL training</h3>
+          <p><span class="beat" data-b="1">To fix the misbehaviors in a more targeted and efficient manner, MiRL instead starts each group of rollouts from a pre-existing trajectory prefix where the policy exhibited a misbehavior. The policy then continues from the prefix until the rollout ends.</span></p>
+          <p><span class="beat" data-b="2">The <em>behavior judge</em> reads the first <i>m</i> steps that the policy takes after the prefix, together with the definition of the misbehavior of that prefix. It gives <i>r</i><sub>e</sub> = 1 if the policy avoids the misbehavior, and <i>r</i><sub>e</sub> = 0 otherwise.</span></p>
+          <p><span class="beat" data-b="3">MiRL combines the two rewards as <i>r</i> = <i>r</i><sub>o</sub> ∧ <i>r</i><sub>e</sub>, so a rollout gains reward only when the tests pass and the misbehavior is avoided. In this way, MiRL avoids reinforcing trajectories that pass the tests but still contain the misbehavior.</span></p>
+        </div>
+      </div>
+    </div>
+    <p class="caption">Overview. (a) The error localizer flags wrong policy steps, and the teacher corrects them; (b) the annotator groups error steps into types, where a few misbehaviors dominate; (c) prefixes that rerun exactly are kept for live RL rollouts; (d) rollouts start from them and gain reward only if they pass the tests and avoid the misbehavior.</p>
+  </div>
+</section>
+
+<section id="misbehaviors">
+  <div class="wrap">
+    <div class="eyebrow">Error profiling</div>
+    <h2>A few error types dominate the distribution</h2>
+    <p>Error profiling on the 2,017 environments yields 12,746 error steps. The eight most frequent error types cover 52.1% of all error steps.</p>
+  </div>
+  <div class="wrap">
+    <div class="fig" id="fig-dist">
+      <div class="toolbar"><div class="seg" id="dist-seg"><button class="on" data-m="steps">% of error steps</button><button data-m="env">% of environments</button></div></div>
+      <div class="dist" id="dist"></div>
+    </div>
+    <p class="caption">Error steps concentrate in a few misbehaviors, followed by a long tail of environment-specific types; the top four appear across many environments.</p>
+  </div>
+</section>
+
+<section id="results">
+  <div class="wrap">
+    <div class="eyebrow">Results</div>
+    <h2>Main results</h2>
+    <h3>MiRL outperforms TMax-4B.</h3>
+    <p>MiRL reaches 51.8% on TB-Lite and 21.3% on TB-2.1, compared with 47.4% and 20.6% for TMax-4B on our evaluation hardware: it gains 4.4 more points on TB-Lite and matches TMax-4B on TB-2.1.</p>
+    <h3>MiRL outperforms all baselines trained on the same number of environments.</h3>
+    <p>MiRL outperforms the best of these baselines by 4.2 points on TB-Lite and 2.2 points on TB-2.1.</p>
+  </div>
+  <div class="wrap">
+    <div class="fig" id="fig-main"><div class="bars" id="main-bars"></div></div>
+    <p class="caption">Terminal task performance: mean (%) and standard error over 3 runs. Dashed boxes are the scores reported in the TMax paper.</p>
+  </div>
+
+  <div class="wrap sub-block">
+    <h2>Ablations</h2>
+    <p>We ablate MiRL by adding its three parts one at a time to TMax-189.</p>
+  </div>
+  <div class="wrap">
+    <div class="fig" id="fig-abl"><div class="bars" id="abl-bars"></div></div>
+    <p class="caption">Ablations of MiRL. Starting from TMax-189, each bar adds one part: environment selection, prefix start, and the behavior reward <i>r</i><sub>e</sub>.</p>
+  </div>
+</section>
+
+<section id="analysis">
+  <div class="wrap">
+    <div class="eyebrow">Analysis</div>
+    <h2>MiRL reduces misbehavior frequency.</h2>
+    <p>For example, “Makes false claims about tests” drops from 26.7% to 8.1% under Gemini and from 29.8% to 11.7% under Qwen. Since the rate drops under both judges, MiRL likely reduces these misbehaviors rather than only learning to satisfy its own judge.</p>
+  </div>
+  <div class="wrap">
+    <div class="fig" id="fig-rate">
+      <button class="replay" aria-label="Replay animation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button>
+      <div class="toolbar"><div class="seg" id="rate-seg"><button class="on" data-j="0">Behavior judge = <b>Gemini</b></button><button data-j="1">Behavior judge = <b>Qwen</b></button></div></div>
+      <div class="rate" id="rate"></div>
+    </div>
+    <p class="caption">Misbehavior rate (%): the share of 16 samples that repeat the misbehavior on unseen prefixes. Judges: Gemini 3.8 Flash (used in training) and Qwen3.8-27B.</p>
+  </div>
+
+  <div class="wrap sub-block">
+    <h2>Pass@k: Sharpening or learning?</h2>
+    <p>A common critique of RL is that it sharpens the output distribution of the base model rather than teaching it new capabilities. TMax-4B shows this pattern: it improves over Qwen3.5-4B at pass@1, but the base model catches up at about <i>k</i> = 11 and is ahead at <i>k</i> = 16. In contrast, MiRL outperforms the base model at every <i>k</i> up to 16 by a large margin, and reaches 39.3% at <i>k</i> = 16.</p>
+  </div>
+  <div class="wrap">
+    <div class="fig" id="fig-pk"><div class="pk" id="pk"></div></div>
+    <p class="caption">Pass@k on TB-2.1 with 16 runs per task. (a) Unbiased pass@k of Qwen3.5-4B, TMax-4B, and MiRL. (b) Pass rate of each task over the 16 runs.</p>
+  </div>
+
+  <div class="wrap sub-block">
+    <h2>MiRL is more data-efficient than TMax-4B.</h2>
+    <p>MiRL uses fewer terminal environments, and only 35% of the rollouts and 34% of the input tokens of TMax-4B. Although MiRL pays a model API fee for the LLMs in error profiling and for the behavior judge in RL training, which TMax-4B does not, its total cost is still lower, at 56% of that of TMax-4B, while it scores 4.4 points higher on TB-Lite and matches it on TB-2.1.</p>
+  </div>
+  <div class="wrap">
+    <div class="fig" id="fig-cost"><div id="cost"></div></div>
+    <p class="caption">Training resources of MiRL relative to TMax-4B, up to the best checkpoint rather than the full training run. Checkered segments are error profiling and solid segments are RL training. GPU time is in A100 hours.</p>
+  </div>
+</section>
+
+<section id="bibtex">
+  <div class="wrap">
+    <div class="eyebrow">Citation</div>
+    <h2>BibTeX</h2>
+    <div class="bib"><button class="copy" id="copy">Copy</button><pre id="bib-text">@misc{tian2026mirlerrortargetedreinforcementlearning,
+      title={MiRL: Error-Targeted Reinforcement Learning for Correcting Terminal Agent Misbehaviors},
+      author={Runchu Tian and Zaid Khan and Zun Wang and Justin Chih-Yao Chen and Mohit Bansal},
+      year={2026},
+      eprint={2610.35697},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2610.35697},
+}</pre></div>
+  </div>
+</section>
+</main>
+
+<footer><div class="wrap">MiRL · University of North Carolina at Chapel Hill</div></footer>
+
+<div class="tip" id="tip"></div>
+<script src="static/js/passk_data.js"></script>
+<script src="static/js/core.js"></script>
+<script src="static/js/overview.js"></script>
+<script src="static/js/method.js"></script>
+<script src="static/js/charts.js"></script>
+</body>
+</html>
